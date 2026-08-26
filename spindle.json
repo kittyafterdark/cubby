@@ -1,0 +1,12 @@
+{
+  "version": "0.1.2",
+  "name": "Cubby",
+  "identifier": "cubby",
+  "author": "kittyafterdark",
+  "github": "https://github.com/kittyafterdark/cubby",
+  "homepage": "https://github.com/kittyafterdark/cubby",
+  "description": "Group your drawer tabs into cozy sidebar cubbies.",
+  "permissions": [],
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "1.1.6"
+}
