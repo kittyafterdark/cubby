@@ -55,6 +55,7 @@ function normalizeConfig(input) {
                     label: typeof member.label === 'string' && member.label.trim() ? member.label.trim() : memberId,
                     owner: typeof member.owner === 'string' && member.owner ? member.owner : undefined,
                     iconName: typeof member.iconName === 'string' && member.iconName ? member.iconName : undefined,
+                    iconSvg: typeof member.iconSvg === 'string' && member.iconSvg ? member.iconSvg : undefined,
                 });
             }
         }
@@ -76,8 +77,45 @@ function shortName(name) {
 function iconInitial(label) {
     return (label.trim()[0] || '•').toUpperCase();
 }
-function ownerLabel(surface) {
-    return surface.owner ? surface.owner : 'Built-in';
+function originLabel(surface) {
+    return surface.owner ? 'Extension' : 'Built-in';
+}
+function safeInlineSvg(svg) {
+    try {
+        const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+        const root = doc.documentElement;
+        if (root.tagName.toLowerCase() !== 'svg' || doc.querySelector('parsererror'))
+            return null;
+        root.querySelectorAll('script, foreignObject').forEach((node) => node.remove());
+        root.querySelectorAll('*').forEach((node) => {
+            for (const attr of [...node.attributes]) {
+                const name = attr.name.toLowerCase();
+                const value = attr.value.trim().toLowerCase();
+                if (name.startsWith('on'))
+                    node.removeAttribute(attr.name);
+                if ((name === 'href' || name === 'xlink:href') && /^(?:https?:|javascript:)/.test(value))
+                    node.removeAttribute(attr.name);
+            }
+        });
+        return document.importNode(root, true);
+    }
+    catch {
+        return null;
+    }
+}
+const BUILTIN_ICONS = [
+    [/summary|compose|prompt/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.8h8l4 4V20H6z"/><path d="M14 3.8V8h4"/><path d="M9 12h6M9 15.5h6"/></svg>'],
+    [/world|wi\b|lore/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4M12 3.8c2 2.2 3.1 5 3.1 8.2S14 18 12 20.2C10 18 8.9 15.2 8.9 12S10 6 12 3.8z"/></svg>'],
+    [/database|databank|data/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.2" ry="3"/><path d="M4.8 5.5v6c0 1.7 3.2 3 7.2 3s7.2-1.3 7.2-3v-6M4.8 11.5v6c0 1.7 3.2 3 7.2 3s7.2-1.3 7.2-3v-6"/></svg>'],
+    [/book/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.2A2.2 2.2 0 0 1 6.2 3H11v16H6.2A2.2 2.2 0 0 0 4 21.2zM20 5.2A2.2 2.2 0 0 0 17.8 3H13v16h4.8a2.2 2.2 0 0 1 2.2 2.2z"/></svg>'],
+    [/memory|cortex|brain/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.4 4.5A3 3 0 0 0 4.8 7a3.2 3.2 0 0 0 .2 5.9A3 3 0 0 0 9.7 17v2.2M14.6 4.5A3 3 0 0 1 19.2 7a3.2 3.2 0 0 1-.2 5.9A3 3 0 0 1 14.3 17v2.2M12 4v16M8 9.2h4M12 13.7h4"/></svg>'],
+    [/profile|persona|character/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5.2 20a6.8 6.8 0 0 1 13.6 0"/></svg>'],
+    [/regex/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="3.5"/><path d="M15.5 5.5v7M12 9h7M15.5 15.5l3 3M18.5 15.5l-3 3"/></svg>'],
+    [/reason/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5a6 6 0 0 0-3.5 10.9V18h7v-3.6A6 6 0 0 0 12 3.5z"/><path d="M9.5 21h5M9 18h6"/></svg>'],
+];
+function fallbackIconSvg(id, label) {
+    const haystack = `${id} ${label}`;
+    return BUILTIN_ICONS.find(([pattern]) => pattern.test(haystack))?.[1] || null;
 }
 export function setup(ctx) {
     const cleanups = [];
@@ -98,29 +136,42 @@ export function setup(ctx) {
     .cubby-root {
       width: 100%;
       min-height: 100%;
-      padding: 14px;
+      padding: clamp(16px, 2vw, 28px);
       color: var(--lumiverse-text);
       font: inherit;
     }
-    .cubby-stack { display: grid; gap: 12px; }
+    .cubby-stack {
+      width: min(100%, 980px);
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
     .cubby-topline {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
-      gap: 12px;
+      gap: 18px;
     }
+    .cubby-heading { min-width: 0; }
     .cubby-eyebrow {
       color: var(--lumiverse-text-dim);
-      font-size: 10px;
-      letter-spacing: .14em;
+      font-size: 9px;
+      letter-spacing: .16em;
       text-transform: uppercase;
-      font-weight: 700;
+      font-weight: 760;
     }
     .cubby-title {
-      margin: 2px 0 0;
-      font-size: 18px;
-      line-height: 1.2;
-      font-weight: 700;
+      margin: 4px 0 0;
+      font-size: 22px;
+      line-height: 1.16;
+      font-weight: 760;
+      letter-spacing: -.02em;
+    }
+    .cubby-subtitle {
+      margin: 7px 0 0;
+      color: var(--lumiverse-text-muted);
+      font-size: 11px;
+      line-height: 1.5;
     }
     .cubby-copy {
       margin: 0;
@@ -139,63 +190,71 @@ export function setup(ctx) {
       padding: 6px 10px;
       font: inherit;
       font-size: 11px;
-      font-weight: 650;
+      font-weight: 680;
       cursor: pointer;
       transition: var(--lumiverse-transition-fast);
     }
     .cubby-button:hover { border-color: var(--lumiverse-border-hover); background: var(--lumiverse-fill); }
-    .cubby-button:disabled { cursor: not-allowed; opacity: .45; }
+    .cubby-button:disabled { cursor: not-allowed; opacity: .42; }
     .cubby-button--accent {
       border-color: color-mix(in srgb, var(--lumiverse-accent) 55%, var(--lumiverse-border));
       color: var(--lumiverse-accent-fg);
       background: var(--lumiverse-accent);
     }
     .cubby-button--danger { color: #e68a8a; }
+
     .cubby-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-      gap: 9px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 11px;
     }
     .cubby-tile {
       appearance: none;
       width: 100%;
       min-width: 0;
-      min-height: 94px;
-      padding: 12px;
+      min-height: 116px;
+      padding: 14px;
       display: grid;
-      grid-template-rows: 32px auto auto;
+      grid-template-rows: 40px auto auto;
       align-content: start;
-      gap: 5px;
+      gap: 7px;
       text-align: left;
       border: 1px solid var(--lumiverse-border);
-      border-radius: var(--lumiverse-radius);
-      background: var(--lumiverse-fill-subtle);
+      border-radius: calc(var(--lumiverse-radius) * 1.15);
+      background: color-mix(in srgb, var(--lumiverse-fill-subtle) 88%, transparent);
       color: var(--lumiverse-text);
       cursor: pointer;
-      transition: var(--lumiverse-transition-fast);
+      transition: transform var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
     }
-    .cubby-tile:hover { border-color: var(--lumiverse-border-hover); background: var(--lumiverse-fill); transform: translateY(-1px); }
-    .cubby-tile:disabled { cursor: not-allowed; opacity: .45; transform: none; }
+    .cubby-tile:hover {
+      border-color: color-mix(in srgb, var(--lumiverse-accent) 34%, var(--lumiverse-border-hover));
+      background: var(--lumiverse-fill);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, .12);
+    }
+    .cubby-tile:focus-visible { outline: 2px solid var(--lumiverse-accent); outline-offset: 2px; }
+    .cubby-tile:disabled { cursor: not-allowed; opacity: .42; transform: none; box-shadow: none; }
     .cubby-tile-icon {
-      width: 28px;
-      height: 28px;
+      width: 38px;
+      height: 38px;
       border: 1px solid var(--lumiverse-border);
-      border-radius: calc(var(--lumiverse-radius) * .75);
+      border-radius: calc(var(--lumiverse-radius) * .9);
       display: grid;
       place-items: center;
       overflow: hidden;
       color: var(--lumiverse-text-muted);
-      font-size: 12px;
-      font-weight: 750;
-      background: var(--lumiverse-fill);
+      font-size: 13px;
+      font-weight: 760;
+      background: color-mix(in srgb, var(--lumiverse-fill) 90%, transparent);
     }
-    .cubby-tile-icon img { width: 18px; height: 18px; object-fit: contain; }
+    .cubby-tile-icon svg { width: 21px; height: 21px; display: block; }
+    .cubby-tile-icon img { width: 21px; height: 21px; object-fit: contain; }
     .cubby-tile-name {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       font-size: 12px;
-      font-weight: 700;
+      font-weight: 740;
     }
     .cubby-tile-meta {
       overflow: hidden;
@@ -203,34 +262,48 @@ export function setup(ctx) {
       white-space: nowrap;
       color: var(--lumiverse-text-dim);
       font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
     }
+
     .cubby-empty {
-      min-height: 180px;
-      padding: 28px 18px;
+      min-height: 210px;
+      padding: 32px 20px;
       border: 1px dashed var(--lumiverse-border);
-      border-radius: var(--lumiverse-radius);
+      border-radius: calc(var(--lumiverse-radius) * 1.2);
       display: grid;
       place-items: center;
       text-align: center;
+      background: color-mix(in srgb, var(--lumiverse-fill-subtle) 55%, transparent);
     }
-    .cubby-empty-inner { max-width: 320px; display: grid; justify-items: center; gap: 9px; }
-    .cubby-empty-icon {
-      width: 44px; height: 44px; color: var(--lumiverse-text-muted);
-    }
+    .cubby-empty-inner { max-width: 340px; display: grid; justify-items: center; gap: 11px; }
+    .cubby-empty-icon { width: 48px; height: 48px; color: var(--lumiverse-text-muted); }
     .cubby-empty-icon svg { width: 100%; height: 100%; }
-    .cubby-group-list { display: grid; gap: 8px; }
+
+    .cubby-group-list { display: grid; gap: 9px; }
     .cubby-group-card {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      gap: 12px;
       align-items: center;
-      padding: 11px 12px;
+      padding: 12px;
       border: 1px solid var(--lumiverse-border);
-      border-radius: var(--lumiverse-radius);
+      border-radius: calc(var(--lumiverse-radius) * 1.05);
+      background: color-mix(in srgb, var(--lumiverse-fill-subtle) 86%, transparent);
+    }
+    .cubby-group-card-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      color: var(--lumiverse-text-muted);
+      border: 1px solid var(--lumiverse-border);
+      border-radius: calc(var(--lumiverse-radius) * .9);
       background: var(--lumiverse-fill-subtle);
     }
+    .cubby-group-card-icon svg { width: 21px; height: 21px; }
     .cubby-group-card-title { font-size: 12px; font-weight: 750; }
-    .cubby-group-card-meta { margin-top: 3px; color: var(--lumiverse-text-dim); font-size: 10px; }
+    .cubby-group-card-meta { margin-top: 4px; color: var(--lumiverse-text-dim); font-size: 10px; }
     .cubby-warning {
       padding: 9px 10px;
       border: 1px solid color-mix(in srgb, #d9aa54 45%, var(--lumiverse-border));
@@ -240,63 +313,121 @@ export function setup(ctx) {
       font-size: 10px;
       line-height: 1.45;
     }
-    .cubby-modal { display: grid; gap: 12px; padding: 2px 0 4px; }
-    .cubby-field { display: grid; gap: 6px; }
+
+    .cubby-modal { display: grid; gap: 14px; padding: 2px 0 4px; }
+    .cubby-field { display: grid; gap: 7px; }
     .cubby-label {
       color: var(--lumiverse-text-muted);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .04em;
+      font-size: 9px;
+      font-weight: 760;
+      letter-spacing: .08em;
       text-transform: uppercase;
     }
     .cubby-input {
       width: 100%;
-      min-height: 36px;
+      min-height: 38px;
       border: 1px solid var(--lumiverse-border);
       border-radius: var(--lumiverse-radius);
       background: var(--lumiverse-fill-subtle);
       color: var(--lumiverse-text);
-      padding: 7px 9px;
+      padding: 8px 10px;
       outline: none;
       font: inherit;
       font-size: 12px;
     }
-    .cubby-input:focus { border-color: var(--lumiverse-border-hover); }
+    .cubby-input:focus { border-color: color-mix(in srgb, var(--lumiverse-accent) 42%, var(--lumiverse-border-hover)); }
+
+    .cubby-folder-section { display: grid; gap: 7px; }
+    .cubby-folder-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .cubby-folder-row {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      min-height: 46px;
+      padding: 7px 9px;
+      border: 1px dashed var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius);
+      background: color-mix(in srgb, var(--lumiverse-fill-subtle) 54%, transparent);
+      color: var(--lumiverse-text-muted);
+    }
+    .cubby-folder-row-icon {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      color: var(--lumiverse-text-muted);
+    }
+    .cubby-folder-row-icon svg { width: 20px; height: 20px; }
+    .cubby-folder-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 720; color: var(--lumiverse-text); }
+    .cubby-folder-row-meta { margin-top: 2px; font-size: 9px; color: var(--lumiverse-text-dim); }
+
+    .cubby-picker-shell { display: grid; gap: 7px; min-height: 0; }
+    .cubby-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .cubby-picker-count { color: var(--lumiverse-text-dim); font-size: 9px; }
     .cubby-picker {
-      max-height: min(52vh, 430px);
+      max-height: 355px;
       overflow: auto;
       display: grid;
-      gap: 5px;
-      padding-right: 2px;
+      gap: 6px;
+      padding: 1px 3px 1px 1px;
+      scrollbar-gutter: stable;
     }
     .cubby-picker-row {
       display: grid;
-      grid-template-columns: 18px minmax(0, 1fr) auto;
-      gap: 8px;
+      grid-template-columns: 34px minmax(0, 1fr) auto 18px;
+      gap: 9px;
       align-items: center;
+      min-height: 52px;
       padding: 8px 9px;
       border: 1px solid var(--lumiverse-border);
       border-radius: var(--lumiverse-radius);
-      background: var(--lumiverse-fill-subtle);
+      background: color-mix(in srgb, var(--lumiverse-fill-subtle) 82%, transparent);
       cursor: pointer;
+      transition: var(--lumiverse-transition-fast);
     }
-    .cubby-picker-row:hover { border-color: var(--lumiverse-border-hover); }
-    .cubby-picker-row[data-disabled="true"] { cursor: not-allowed; opacity: .45; }
+    .cubby-picker-row:hover { border-color: var(--lumiverse-border-hover); background: var(--lumiverse-fill); }
+    .cubby-picker-row[data-selected="true"] {
+      border-color: color-mix(in srgb, var(--lumiverse-accent) 54%, var(--lumiverse-border));
+      background: color-mix(in srgb, var(--lumiverse-accent) 8%, var(--lumiverse-fill-subtle));
+    }
+    .cubby-picker-row[data-disabled="true"] { cursor: not-allowed; opacity: .44; }
+    .cubby-picker-icon {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: calc(var(--lumiverse-radius) * .75);
+      color: var(--lumiverse-text-muted);
+      background: var(--lumiverse-fill-subtle);
+      overflow: hidden;
+      font-size: 10px;
+      font-weight: 760;
+    }
+    .cubby-picker-icon svg, .cubby-picker-icon img { width: 18px; height: 18px; object-fit: contain; }
     .cubby-picker-main { min-width: 0; }
-    .cubby-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; }
-    .cubby-picker-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; color: var(--lumiverse-text-dim); font-size: 9px; }
+    .cubby-picker-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 720; }
+    .cubby-picker-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; color: var(--lumiverse-text-dim); font-size: 9px; }
     .cubby-pill {
       max-width: 112px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      padding: 3px 6px;
+      padding: 3px 7px;
       border: 1px solid var(--lumiverse-border);
       border-radius: 999px;
       color: var(--lumiverse-text-dim);
       font-size: 8px;
     }
-    .cubby-modal-footer { display: flex; justify-content: flex-end; gap: 7px; padding-top: 2px; }
+    .cubby-picker-row input[type="checkbox"] { margin: 0; accent-color: var(--lumiverse-accent); }
+    .cubby-modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 7px;
+      padding-top: 5px;
+      border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 72%, transparent);
+    }
     .cubby-header-back {
       appearance: none;
       display: none;
@@ -312,11 +443,23 @@ export function setup(ctx) {
       cursor: pointer;
     }
     .cubby-header-back:hover { border-color: var(--lumiverse-border-hover); color: var(--lumiverse-text); }
-    @media (max-width: 520px) {
-      .cubby-root { padding: 10px; }
-      .cubby-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-      .cubby-tile { min-height: 86px; padding: 10px; }
-      .cubby-group-card { grid-template-columns: 1fr; }
+
+    @media (max-width: 760px) {
+      .cubby-root { padding: 14px; }
+      .cubby-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .cubby-tile { min-height: 102px; padding: 12px; }
+      .cubby-group-card { grid-template-columns: 38px minmax(0, 1fr); }
+      .cubby-group-card .cubby-actions { grid-column: 1 / -1; }
+    }
+    @media (max-width: 470px) {
+      .cubby-topline { align-items: stretch; }
+      .cubby-title { font-size: 19px; }
+      .cubby-grid { grid-template-columns: 1fr; }
+      .cubby-picker-row { grid-template-columns: 30px minmax(0, 1fr) 18px; }
+      .cubby-picker-row .cubby-pill { display: none; }
+      .cubby-folder-strip { grid-template-columns: 1fr; }
+      .cubby-folder-row { grid-template-columns: 28px minmax(0, 1fr); }
+      .cubby-folder-row .cubby-pill { display: none; }
     }
   `);
     cleanups.push(removeBaseStyle);
@@ -344,6 +487,7 @@ export function setup(ctx) {
             label: live.label || member.label || live.id,
             owner: live.owner,
             iconName: live.iconName,
+            iconSvg: live.iconSvg,
         };
     }
     function refreshHideStyle() {
@@ -364,22 +508,33 @@ export function setup(ctx) {
         });
         removeHideStyle = ctx.dom.addStyle(rules.join('\n'));
     }
-    function makeSurfaceIcon(surface, label) {
-        const box = document.createElement('span');
-        box.className = 'cubby-tile-icon';
-        if (surface?.iconName) {
+    function appendSurfaceIcon(box, surface, snapshot, label, id) {
+        const svgSource = surface?.iconSvg || snapshot?.iconSvg || fallbackIconSvg(id, label);
+        if (svgSource) {
+            const svg = safeInlineSvg(svgSource);
+            if (svg) {
+                box.append(svg);
+                return;
+            }
+        }
+        const iconName = surface?.iconName || snapshot?.iconName;
+        if (iconName && /^(?:data:|blob:|https?:|\/)/i.test(iconName)) {
             const img = document.createElement('img');
-            img.src = surface.iconName;
+            img.src = iconName;
             img.alt = '';
             img.loading = 'lazy';
             img.addEventListener('error', () => {
                 box.replaceChildren(document.createTextNode(iconInitial(label)));
             }, { once: true });
             box.append(img);
+            return;
         }
-        else {
-            box.textContent = iconInitial(label);
-        }
+        box.textContent = iconInitial(label);
+    }
+    function makeSurfaceIcon(surface, snapshot, label, id, className = 'cubby-tile-icon') {
+        const box = document.createElement('span');
+        box.className = className;
+        appendSurfaceIcon(box, surface, snapshot, label, id);
         return box;
     }
     async function openMember(memberId) {
@@ -398,13 +553,17 @@ export function setup(ctx) {
         const top = document.createElement('div');
         top.className = 'cubby-topline';
         const heading = document.createElement('div');
+        heading.className = 'cubby-heading';
         const eyebrow = document.createElement('div');
         eyebrow.className = 'cubby-eyebrow';
         eyebrow.textContent = 'Cubby';
         const title = document.createElement('h3');
         title.className = 'cubby-title';
         title.textContent = group.name;
-        heading.append(eyebrow, title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'cubby-subtitle';
+        subtitle.textContent = `${group.members.length} tab${group.members.length === 1 ? '' : 's'} tucked away`;
+        heading.append(eyebrow, title, subtitle);
         const manage = document.createElement('button');
         manage.type = 'button';
         manage.className = 'cubby-button';
@@ -440,13 +599,13 @@ export function setup(ctx) {
                 tile.className = 'cubby-tile';
                 tile.disabled = !live;
                 tile.title = live ? `Open ${label}` : `${label} is currently unavailable`;
-                tile.append(makeSurfaceIcon(live, label));
+                tile.append(makeSurfaceIcon(live, member, label, member.id));
                 const name = document.createElement('span');
                 name.className = 'cubby-tile-name';
                 name.textContent = label;
                 const meta = document.createElement('span');
                 meta.className = 'cubby-tile-meta';
-                meta.textContent = live ? ownerLabel(live) : 'Unavailable';
+                meta.textContent = live ? originLabel(live) : 'Unavailable';
                 tile.append(name, meta);
                 if (live)
                     tile.addEventListener('click', () => void openMember(member.id));
@@ -514,6 +673,7 @@ export function setup(ctx) {
                 label: surface.label || surface.id,
                 owner: surface.owner,
                 iconName: surface.iconName,
+                iconSvg: surface.iconSvg,
             });
         }
         for (const member of group?.members || []) {
@@ -536,8 +696,8 @@ export function setup(ctx) {
         }
         const modal = ctx.ui.showModal({
             title: editing ? `Edit ${editing.name}` : 'New Cubby',
-            width: 520,
-            maxHeight: 650,
+            width: 590,
+            maxHeight: 740,
         });
         const selected = new Set(editing?.members.map((member) => member.id) || []);
         const taken = assignments(editing?.id);
@@ -556,62 +716,130 @@ export function setup(ctx) {
         nameInput.placeholder = 'Writing';
         nameInput.value = editing?.name || '';
         nameField.append(nameLabel, nameInput);
+        body.append(nameField);
+        // Cubbies are intentionally shown outside the searchable tab picker. They
+        // are destinations, not candidate children: no nesting, no accidental loops.
+        if (config.groups.length) {
+            const folderSection = document.createElement('section');
+            folderSection.className = 'cubby-folder-section';
+            const folderLabel = document.createElement('div');
+            folderLabel.className = 'cubby-label';
+            folderLabel.textContent = 'Cubbies';
+            const folderStrip = document.createElement('div');
+            folderStrip.className = 'cubby-folder-strip';
+            for (const group of config.groups) {
+                const row = document.createElement('div');
+                row.className = 'cubby-folder-row';
+                const icon = document.createElement('span');
+                icon.className = 'cubby-folder-row-icon';
+                const svg = safeInlineSvg(CUBBY_ICON);
+                if (svg)
+                    icon.append(svg);
+                const info = document.createElement('span');
+                const title = document.createElement('span');
+                title.className = 'cubby-folder-row-name';
+                title.textContent = group.name;
+                const meta = document.createElement('span');
+                meta.className = 'cubby-folder-row-meta';
+                meta.textContent = `${group.members.length} tab${group.members.length === 1 ? '' : 's'} · not selectable`;
+                info.append(title, meta);
+                const pill = document.createElement('span');
+                pill.className = 'cubby-pill';
+                pill.textContent = editing?.id === group.id ? 'This Cubby' : 'Folder';
+                row.append(icon, info, pill);
+                folderStrip.append(row);
+            }
+            folderSection.append(folderLabel, folderStrip);
+            body.append(folderSection);
+        }
         const searchField = document.createElement('label');
         searchField.className = 'cubby-field';
         const searchLabel = document.createElement('span');
         searchLabel.className = 'cubby-label';
-        searchLabel.textContent = 'Tabs';
+        searchLabel.textContent = 'Drawer tabs';
         const searchInput = document.createElement('input');
         searchInput.className = 'cubby-input';
         searchInput.type = 'search';
-        searchInput.placeholder = 'Search drawer tabs…';
+        searchInput.placeholder = 'Search tabs…';
         searchField.append(searchLabel, searchInput);
+        body.append(searchField);
+        const pickerShell = document.createElement('div');
+        pickerShell.className = 'cubby-picker-shell';
+        const pickerHead = document.createElement('div');
+        pickerHead.className = 'cubby-picker-head';
+        const pickerHint = document.createElement('span');
+        pickerHint.className = 'cubby-copy';
+        pickerHint.textContent = 'Choose what lives inside this Cubby.';
+        const pickerCount = document.createElement('span');
+        pickerCount.className = 'cubby-picker-count';
+        pickerHead.append(pickerHint, pickerCount);
         const picker = document.createElement('div');
         picker.className = 'cubby-picker';
+        pickerShell.append(pickerHead, picker);
+        body.append(pickerShell);
         function drawPicker() {
             picker.replaceChildren();
             const needle = searchInput.value.trim().toLocaleLowerCase();
-            const visible = candidates.filter((member) => {
+            const visible = candidates
+                .filter((member) => {
                 if (!needle)
                     return true;
-                return `${member.label} ${member.owner || 'built-in'}`.toLocaleLowerCase().includes(needle);
+                const live = availableSurface(member.id);
+                return `${live?.label || member.label} ${live ? originLabel(live) : 'unavailable'}`.toLocaleLowerCase().includes(needle);
+            })
+                .sort((a, b) => {
+                const aSelected = selected.has(a.id) ? 0 : 1;
+                const bSelected = selected.has(b.id) ? 0 : 1;
+                if (aSelected !== bSelected)
+                    return aSelected - bSelected;
+                return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
             });
+            pickerCount.textContent = `${selected.size} selected · ${visible.length} shown`;
             if (!visible.length) {
                 const copy = document.createElement('p');
                 copy.className = 'cubby-copy';
-                copy.textContent = candidates.length ? 'No tabs match that search.' : 'No drawer tabs are available yet.';
+                copy.textContent = candidates.length ? 'No drawer tabs match that search.' : 'No drawer tabs are available yet.';
                 picker.append(copy);
                 return;
             }
             for (const member of visible) {
                 const assigned = taken.get(member.id);
                 const live = availableSurface(member.id);
+                const label = live?.label || member.label;
                 const row = document.createElement('label');
                 row.className = 'cubby-picker-row';
                 row.dataset.disabled = assigned ? 'true' : 'false';
+                row.dataset.selected = selected.has(member.id) ? 'true' : 'false';
+                const icon = makeSurfaceIcon(live, member, label, member.id, 'cubby-picker-icon');
+                const main = document.createElement('span');
+                main.className = 'cubby-picker-main';
+                const title = document.createElement('span');
+                title.className = 'cubby-picker-name';
+                title.textContent = label;
+                const meta = document.createElement('span');
+                meta.className = 'cubby-picker-meta';
+                meta.textContent = assigned
+                    ? `Already tucked into ${assigned.name}`
+                    : live
+                        ? originLabel(live)
+                        : 'Unavailable · assignment will be kept';
+                main.append(title, meta);
+                const pill = document.createElement('span');
+                pill.className = 'cubby-pill';
+                pill.textContent = assigned ? `In ${assigned.name}` : live ? originLabel(live) : 'Dormant';
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
                 checkbox.checked = selected.has(member.id);
                 checkbox.disabled = Boolean(assigned);
+                checkbox.setAttribute('aria-label', `Include ${label}`);
                 checkbox.addEventListener('change', () => {
                     if (checkbox.checked)
                         selected.add(member.id);
                     else
                         selected.delete(member.id);
+                    drawPicker();
                 });
-                const main = document.createElement('span');
-                main.className = 'cubby-picker-main';
-                const title = document.createElement('span');
-                title.className = 'cubby-picker-name';
-                title.textContent = live?.label || member.label;
-                const meta = document.createElement('span');
-                meta.className = 'cubby-picker-meta';
-                meta.textContent = live ? ownerLabel(live) : 'Unavailable — assignment will be kept';
-                main.append(title, meta);
-                const pill = document.createElement('span');
-                pill.className = 'cubby-pill';
-                pill.textContent = assigned ? `In ${assigned.name}` : live ? (live.owner ? 'Extension' : 'Built-in') : 'Dormant';
-                row.append(checkbox, main, pill);
+                row.append(icon, main, pill, checkbox);
                 picker.append(row);
             }
         }
@@ -643,6 +871,7 @@ export function setup(ctx) {
                         label: live.label || live.id,
                         owner: live.owner,
                         iconName: live.iconName,
+                        iconSvg: live.iconSvg,
                     };
                 }
                 return existingSnapshots.get(id) || { id, label: id };
@@ -668,7 +897,7 @@ export function setup(ctx) {
             }
         });
         footer.append(cancel, save);
-        body.append(nameField, searchField, picker, footer);
+        body.append(footer);
         modal.root.replaceChildren(body);
         queueMicrotask(() => nameInput.focus());
     }
@@ -697,13 +926,17 @@ export function setup(ctx) {
         const top = document.createElement('div');
         top.className = 'cubby-topline';
         const heading = document.createElement('div');
+        heading.className = 'cubby-heading';
         const eyebrow = document.createElement('div');
         eyebrow.className = 'cubby-eyebrow';
         eyebrow.textContent = 'Sidebar folders';
         const title = document.createElement('h3');
         title.className = 'cubby-title';
         title.textContent = 'Cubby';
-        heading.append(eyebrow, title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'cubby-subtitle';
+        subtitle.textContent = 'Give the sidebar some breathing room.';
+        heading.append(eyebrow, title, subtitle);
         const add = document.createElement('button');
         add.type = 'button';
         add.className = 'cubby-button cubby-button--accent';
@@ -715,7 +948,7 @@ export function setup(ctx) {
         stack.append(top);
         const intro = document.createElement('p');
         intro.className = 'cubby-copy';
-        intro.textContent = 'Group drawer tabs behind one comfy launcher. A tab can live in one Cubby at a time; removing a Cubby simply puts its children back in the sidebar.';
+        intro.textContent = 'Each drawer tab can live in one Cubby at a time. Delete a Cubby and its tabs simply return to the sidebar.';
         stack.append(intro);
         if (managerConsumesDrawerSlot) {
             const warning = document.createElement('div');
@@ -749,6 +982,11 @@ export function setup(ctx) {
             config.groups.forEach((group, index) => {
                 const card = document.createElement('div');
                 card.className = 'cubby-group-card';
+                const cardIcon = document.createElement('div');
+                cardIcon.className = 'cubby-group-card-icon';
+                const folderSvg = safeInlineSvg(CUBBY_ICON);
+                if (folderSvg)
+                    cardIcon.append(folderSvg);
                 const info = document.createElement('div');
                 const name = document.createElement('div');
                 name.className = 'cubby-group-card-title';
@@ -780,7 +1018,7 @@ export function setup(ctx) {
                 remove.textContent = 'Delete';
                 remove.addEventListener('click', () => void deleteGroup(group));
                 actions.append(open, edit, remove);
-                card.append(info, actions);
+                card.append(cardIcon, info, actions);
                 list.append(card);
             });
             stack.append(list);
@@ -802,7 +1040,8 @@ export function setup(ctx) {
     }
     function installHeaderBack() {
         try {
-            headerMount = ctx.ui.mount('drawer_header_actions');
+            const mount = ctx.ui.mount('drawer_header_actions');
+            headerMount = mount;
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'cubby-header-back';
@@ -813,7 +1052,7 @@ export function setup(ctx) {
                     return;
                 groupRuntimes.get(id)?.handle.activate();
             });
-            headerMount.append(button);
+            mount.append(button);
             headerBackButton = button;
             cleanups.push(() => button.remove());
             updateHeaderBack(ctx.ui.events.getDrawerState().tabId);
@@ -825,7 +1064,20 @@ export function setup(ctx) {
     function handleSurfaceList(next) {
         const ownId = ctx.manifest.identifier;
         const filtered = next
-            .filter((surface) => surface.kind === 'drawer_tab' && surface.owner !== ownId)
+            .filter((surface) => {
+            if (surface.kind !== 'drawer_tab')
+                return false;
+            if (surface.owner === ownId)
+                return false;
+            // Some host builds expose extension drawer surfaces with a runtime owner
+            // instead of the manifest identifier. Cubby's own synthetic destinations
+            // are never valid children, so also reject them by their stable IDs.
+            if (surface.id === 'cubby_manager' || surface.id === 'cubby_compatibility')
+                return false;
+            if (surface.id.startsWith('cubby_g_'))
+                return false;
+            return true;
+        })
             .map((surface) => ({ ...surface }));
         const signature = JSON.stringify(filtered.map((surface) => [surface.id, surface.label, surface.owner, surface.iconName, Boolean(surface.iconSvg)]));
         if (signature === lastSurfaceSignature)

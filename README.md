@@ -2,6 +2,16 @@
 
 Cubby is an unofficial community Spindle extension for Lumiverse that groups drawer tabs behind compact sidebar folder tabs.
 
+## v0.2.0 — polish pass
+
+- Reworked Cubby launcher into a calmer responsive card grid.
+- Uses host/extension SVG icons when available, with built-in fallbacks instead of giant initial-letter placeholders.
+- Removed raw extension owner UUIDs from normal UI.
+- Cleaned up manager cards and picker rows, including selected-state treatment and selected-first sorting.
+- Existing Cubbies now live in their own non-searchable, non-selectable section in the picker. Nested Cubbies remain intentionally unsupported.
+- Hardened drawer-surface filtering so Cubby's own synthetic folder tabs cannot appear as member candidates.
+
+
 ## Features
 
 - Create, rename, edit, and delete one-level Cubby groups.
@@ -17,7 +27,7 @@ Cubby is an unofficial community Spindle extension for Lumiverse that groups dra
 
 ## Scope cage
 
-v0.1 deliberately does **not** implement nesting, drag-and-drop ordering, smart folders, recent tabs, badges, or a theme editor.
+v0.2 deliberately does **not** implement nesting, drag-and-drop ordering, smart folders, recent tabs, badges, or a theme editor.
 
 ## Compatibility note
 
