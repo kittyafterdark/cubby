@@ -2,10 +2,8 @@ import type {
   SpindleDrawerTabHandle,
   SpindleFrontendContext,
   SpindleHostSurfaceInfo,
-  SpindleSettingsTabHandle,
 } from 'lumiverse-spindle-types'
 
-const CONFIG_KEY = 'cubby:config-v1'
 const MAX_GROUPS = 8
 const CUBBY_ICON = `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -31,7 +29,7 @@ type CubbyConfig = {
   groups: CubbyGroup[]
 }
 
-type ManagerHandle = Pick<SpindleSettingsTabHandle, 'root' | 'activate' | 'destroy'>
+type ManagerHandle = { root: HTMLElement; activate: () => void; destroy: () => void }
 
 type GroupRuntime = {
   group: CubbyGroup
@@ -118,8 +116,7 @@ function ownerLabel(surface: Pick<SpindleHostSurfaceInfo, 'owner'>): string {
   return surface.owner ? surface.owner : 'Built-in'
 }
 
-export async function setup(ctx: SpindleFrontendContext) {
-  ctx.deferReady()
+export function setup(ctx: SpindleFrontendContext) {
 
   const cleanups: Array<() => void> = []
   const groupRuntimes = new Map<string, GroupRuntime>()
@@ -133,6 +130,7 @@ export async function setup(ctx: SpindleFrontendContext) {
   let headerBackButton: HTMLButtonElement | null = null
   let lastSurfaceSignature = ''
   let disposed = false
+  let configLoaded = false
 
   const removeBaseStyle = ctx.dom.addStyle(`
     .cubby-root, .cubby-root * { box-sizing: border-box; }
@@ -371,13 +369,13 @@ export async function setup(ctx: SpindleFrontendContext) {
   }
 
   async function persist(next: CubbyConfig) {
-    if (!ctx.settings) return
     config = normalizeConfig(next)
-    await ctx.settings.set(CONFIG_KEY, cloneConfig(config))
+    configLoaded = true
     syncGroupTabs()
     refreshHideStyle()
     renderManager()
     updateHeaderBack(ctx.ui.events.getDrawerState().tabId)
+    ctx.sendToBackend({ type: 'save_config', config: cloneConfig(config) })
   }
 
   function currentMemberSnapshot(member: MemberSnapshot): MemberSnapshot {
@@ -912,7 +910,7 @@ export async function setup(ctx: SpindleFrontendContext) {
   }
 
   try {
-    if (!ctx.settings || !ctx.host.surfaces) {
+    if (!ctx.host.surfaces) {
       const fallback = ctx.ui.registerDrawerTab({
         id: 'cubby_compatibility',
         title: 'Cubby',
@@ -925,7 +923,7 @@ export async function setup(ctx: SpindleFrontendContext) {
       message.className = 'cubby-empty'
       const copy = document.createElement('p')
       copy.className = 'cubby-copy'
-      copy.textContent = 'Cubby needs a newer Spindle host with persistent extension settings and host surface discovery.'
+      copy.textContent = 'Cubby needs a newer Spindle host with drawer surface discovery.'
       message.append(copy)
       fallback.root.append(message)
       cleanups.push(() => fallback.destroy())
@@ -934,20 +932,29 @@ export async function setup(ctx: SpindleFrontendContext) {
 
     console.info('[Cubby] setup: registering manager UI')
 
-    if (ctx.ui.registerSettingsTab) {
-      manager = ctx.ui.registerSettingsTab({
-        id: 'cubby',
-        title: 'Cubby',
-        shortName: 'Cubby',
-        iconSvg: CUBBY_ICON,
-        description: 'Group drawer tabs into sidebar cubbies',
-        keywords: ['cubby', 'folders', 'sidebar', 'drawer', 'tabs', 'groups'],
-        position: 'bottom',
-      })
+    // Match known-good community extensions: Settings -> Extensions is a mount
+    // surface, not a synthetic drawer/settings registry. Mounting here also lets
+    // the Extensions panel mark Cubby as owning settings UI.
+    try {
+      const settingsMount = ctx.ui.mount('settings_extensions')
+      const settingsRoot = document.createElement('div')
+      settingsMount.appendChild(settingsRoot)
+      manager = {
+        root: settingsRoot,
+        activate: () => {
+          const extensionId = settingsMount.getAttribute('data-spindle-extension-root')
+          ctx.events.emit('open-settings', {
+            view: 'extensions',
+            ...(extensionId ? { extensionId } : {}),
+          })
+        },
+        destroy: () => settingsRoot.remove(),
+      }
       managerConsumesDrawerSlot = false
-    } else {
+    } catch (error) {
+      console.warn('[Cubby] settings_extensions mount unavailable; using drawer manager fallback', error)
       managerConsumesDrawerSlot = true
-      manager = ctx.ui.registerDrawerTab({
+      const fallbackManager = ctx.ui.registerDrawerTab({
         id: 'cubby_manager',
         title: 'Cubby',
         shortName: 'Cubby',
@@ -955,32 +962,35 @@ export async function setup(ctx: SpindleFrontendContext) {
         keywords: ['cubby', 'folders', 'sidebar', 'drawer', 'tabs', 'groups'],
         iconSvg: CUBBY_ICON,
       })
+      manager = {
+        root: fallbackManager.root,
+        activate: () => fallbackManager.activate(),
+        destroy: () => fallbackManager.destroy(),
+      }
     }
     cleanups.push(() => manager?.destroy())
 
-    // A brand-new private setting is represented by a 404 at the REST layer.
-    // Current Spindle normally translates that to `undefined`, but older/current
-    // host bundles can leak the rejection through. Never let an absent settings
-    // row prevent Cubby from registering its UI. Bootstrap the row on first run.
-    try {
-      const saved = await ctx.settings.get<CubbyConfig>(CONFIG_KEY)
-      config = normalizeConfig(saved)
-      if (saved === undefined) {
-        await ctx.settings.set(CONFIG_KEY, cloneConfig(config))
-        console.info('[Cubby] setup: initialized empty config')
+    // Use the backend's per-user extension storage, following working Spindle
+    // extensions. Frontend ctx.settings is deliberately not used here: on some
+    // current host bundles its bridge is disposed before async setup work runs.
+    const unsubBackend = ctx.onBackendMessage((payload: any) => {
+      if (!payload || typeof payload !== 'object') return
+      if (payload.type === 'config_loaded') {
+        // Do not overwrite an edit made before a slow first load completes.
+        if (configLoaded) return
+        configLoaded = true
+        config = normalizeConfig(payload.config)
+        syncGroupTabs()
+        renderManager()
+        refreshHideStyle()
+        updateHeaderBack(ctx.ui.events.getDrawerState().tabId)
+        console.info(`[Cubby] setup: loaded ${config.groups.length} cubby${config.groups.length === 1 ? '' : 'ies'}`)
+      } else if (payload.type === 'config_error') {
+        console.error('[Cubby] persistent config error', payload.error)
       }
-    } catch (error) {
-      console.warn('[Cubby] setup: settings read failed; booting with empty config', error)
-      config = { version: 1, groups: [] }
-      try {
-        await ctx.settings.set(CONFIG_KEY, cloneConfig(config))
-        console.info('[Cubby] setup: initialized config after read failure')
-      } catch (writeError) {
-        // Keep the manager alive even when persistence is temporarily broken.
-        // Saves may fail later, but Cubby remains visible and debuggable.
-        console.error('[Cubby] setup: could not initialize persistent config', writeError)
-      }
-    }
+    })
+    cleanups.push(unsubBackend)
+    ctx.sendToBackend({ type: 'get_config' })
 
     handleSurfaceList(ctx.host.surfaces.list(['drawer_tab']))
     syncGroupTabs()
@@ -997,17 +1007,6 @@ export async function setup(ctx: SpindleFrontendContext) {
     cleanups.push(unsubDrawer)
     installHeaderBack()
 
-    const unwatch = ctx.settings.watch<CubbyConfig>(CONFIG_KEY, (value) => {
-      if (disposed || !value) return
-      const normalized = normalizeConfig(value)
-      if (JSON.stringify(normalized) === JSON.stringify(config)) return
-      config = normalized
-      syncGroupTabs()
-      renderManager()
-      refreshHideStyle()
-      updateHeaderBack(ctx.ui.events.getDrawerState().tabId)
-    })
-    cleanups.push(unwatch)
 
     cleanups.push(() => {
       removeHideStyle?.()
@@ -1022,7 +1021,13 @@ export async function setup(ctx: SpindleFrontendContext) {
         try { cleanup() } catch (error) { console.warn('[Cubby] cleanup failed', error) }
       }
     }
-  } finally {
-    ctx.ready()
+  } catch (error) {
+    console.error('[Cubby] setup failed', error)
+    return () => {
+      disposed = true
+      for (const cleanup of cleanups.splice(0).reverse()) {
+        try { cleanup() } catch {}
+      }
+    }
   }
 }

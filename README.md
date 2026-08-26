@@ -2,7 +2,7 @@
 
 Cubby is an unofficial community Spindle extension for Lumiverse that groups drawer tabs behind compact sidebar folder tabs.
 
-## v0.1.0
+## Features
 
 - Create, rename, edit, and delete one-level Cubby groups.
 - Discover current built-in and extension-owned drawer tabs through the host surface catalog.
@@ -11,8 +11,9 @@ Cubby is an unofficial community Spindle extension for Lumiverse that groups dra
 - Hide grouped child buttons from the sidebar while leaving their real drawer tabs invocable.
 - Keep unavailable extension tabs as dormant assignments so they return when the extension comes back.
 - Add a contextual `← Cubby name` action to the drawer header while a grouped child is open.
-- Store configuration in extension settings. No backend and no gated permissions.
-- Manage Cubby from a settings tab when the host supports extension settings tabs; older compatible hosts fall back to a drawer manager.
+- Manage Cubby from Settings → Extensions through the standard `settings_extensions` mount.
+- Persist configuration per user through a tiny backend using `spindle.userStorage`.
+- No gated permissions.
 
 ## Scope cage
 
@@ -24,6 +25,8 @@ The actual drawer navigation is first-class Spindle: discovery uses `ctx.host.su
 
 The only presentation shim is hiding the original sidebar buttons. Current Lumiverse staging emits stable Spindle markers for each drawer button (`data-spindle-mount="drawer_tab"` + `data-spindle-scope="drawer-tab:<id>"`), so Cubby targets those markers rather than hashed CSS module classes.
 
+Cubby's settings integration deliberately follows the working Prompt Viewer pattern: mount UI into `settings_extensions`, and use backend `userStorage` for persistence instead of the frontend private settings bridge.
+
 ## Build
 
 ```bash
@@ -31,7 +34,7 @@ bun install
 bun run build
 ```
 
-Lumiverse can also build a frontend-only extension from `src/frontend.ts` when installing from source, but `dist/frontend.js` is included here for convenience.
+The build produces both `dist/backend.js` and `dist/frontend.js`.
 
 ## Before publishing
 
@@ -39,13 +42,24 @@ Replace the placeholder `github` and `homepage` URLs in `spindle.json` with the 
 
 Cubby is independent and unofficial. It is not affiliated with or endorsed by Lumiverse.
 
-## v0.1.1
+## Changelog
 
-- Fix Spindle private settings key format (`cubby:config-v1`). Current Spindle requires extension-private keys in `module:key` form.
+### v0.1.3
 
-## v0.1.2
+- Replace the synthetic settings-tab registration with the proven `ctx.ui.mount('settings_extensions')` integration.
+- Replace `ctx.settings` persistence with backend per-user `spindle.userStorage`.
+- Remove async frontend setup/defer-ready persistence work that could hit `SETTINGS_BRIDGE_DISPOSED`.
+- Add `dist/backend.js` and a two-target build script.
+- Keep a drawer-manager fallback only if the settings mount itself is unavailable.
 
-- Register Cubby's manager UI before touching persistence, so a settings read failure can no longer make the extension invisible.
-- Treat a missing first-run settings row as an empty config and bootstrap it automatically.
-- Tolerate host bundles that leak the REST 404 from `ctx.settings.get()` instead of translating it to `undefined`.
-- Add startup logging around manager registration and config initialization for less séance-based debugging.
+### v0.1.2
+
+- Kept Cubby's manager alive when frontend settings reads failed, exposing the underlying `SETTINGS_BRIDGE_DISPOSED` lifecycle problem instead of failing invisibly.
+
+### v0.1.1
+
+- Corrected the private settings key format used by the abandoned frontend-settings implementation.
+
+### v0.1.0
+
+- Initial Cubby prototype.

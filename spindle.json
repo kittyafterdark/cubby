@@ -1,12 +1,13 @@
 {
-  "version": "0.1.2",
+  "version": "0.1.3",
   "name": "Cubby",
   "identifier": "cubby",
-  "author": "kittyafterdark",
-  "github": "https://github.com/kittyafterdark/cubby",
-  "homepage": "https://github.com/kittyafterdark/cubby",
-  "description": "Group your drawer tabs into cozy sidebar cubbies.",
+  "author": "Community prototype",
+  "github": "https://github.com/REPLACE_ME/cubby",
+  "homepage": "https://github.com/REPLACE_ME/cubby",
+  "description": "Unofficial Spindle extension that groups drawer tabs into cozy sidebar cubbies.",
   "permissions": [],
   "entry_frontend": "dist/frontend.js",
-  "minimum_lumiverse_version": "1.1.6"
+  "minimum_lumiverse_version": "1.1.6",
+  "entry_backend": "dist/backend.js"
 }

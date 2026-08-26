@@ -1,4 +1,3 @@
-const CONFIG_KEY = 'cubby:config-v1';
 const MAX_GROUPS = 8;
 const CUBBY_ICON = `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -80,8 +79,7 @@ function iconInitial(label) {
 function ownerLabel(surface) {
     return surface.owner ? surface.owner : 'Built-in';
 }
-export async function setup(ctx) {
-    ctx.deferReady();
+export function setup(ctx) {
     const cleanups = [];
     const groupRuntimes = new Map();
     let config = { version: 1, groups: [] };
@@ -94,6 +92,7 @@ export async function setup(ctx) {
     let headerBackButton = null;
     let lastSurfaceSignature = '';
     let disposed = false;
+    let configLoaded = false;
     const removeBaseStyle = ctx.dom.addStyle(`
     .cubby-root, .cubby-root * { box-sizing: border-box; }
     .cubby-root {
@@ -328,14 +327,13 @@ export async function setup(ctx) {
         return managerConsumesDrawerSlot ? MAX_GROUPS - 1 : MAX_GROUPS;
     }
     async function persist(next) {
-        if (!ctx.settings)
-            return;
         config = normalizeConfig(next);
-        await ctx.settings.set(CONFIG_KEY, cloneConfig(config));
+        configLoaded = true;
         syncGroupTabs();
         refreshHideStyle();
         renderManager();
         updateHeaderBack(ctx.ui.events.getDrawerState().tabId);
+        ctx.sendToBackend({ type: 'save_config', config: cloneConfig(config) });
     }
     function currentMemberSnapshot(member) {
         const live = availableSurface(member.id);
@@ -840,7 +838,7 @@ export async function setup(ctx) {
         refreshHideStyle();
     }
     try {
-        if (!ctx.settings || !ctx.host.surfaces) {
+        if (!ctx.host.surfaces) {
             const fallback = ctx.ui.registerDrawerTab({
                 id: 'cubby_compatibility',
                 title: 'Cubby',
@@ -853,28 +851,37 @@ export async function setup(ctx) {
             message.className = 'cubby-empty';
             const copy = document.createElement('p');
             copy.className = 'cubby-copy';
-            copy.textContent = 'Cubby needs a newer Spindle host with persistent extension settings and host surface discovery.';
+            copy.textContent = 'Cubby needs a newer Spindle host with drawer surface discovery.';
             message.append(copy);
             fallback.root.append(message);
             cleanups.push(() => fallback.destroy());
             return () => cleanups.splice(0).reverse().forEach((cleanup) => cleanup());
         }
         console.info('[Cubby] setup: registering manager UI');
-        if (ctx.ui.registerSettingsTab) {
-            manager = ctx.ui.registerSettingsTab({
-                id: 'cubby',
-                title: 'Cubby',
-                shortName: 'Cubby',
-                iconSvg: CUBBY_ICON,
-                description: 'Group drawer tabs into sidebar cubbies',
-                keywords: ['cubby', 'folders', 'sidebar', 'drawer', 'tabs', 'groups'],
-                position: 'bottom',
-            });
+        // Match known-good community extensions: Settings -> Extensions is a mount
+        // surface, not a synthetic drawer/settings registry. Mounting here also lets
+        // the Extensions panel mark Cubby as owning settings UI.
+        try {
+            const settingsMount = ctx.ui.mount('settings_extensions');
+            const settingsRoot = document.createElement('div');
+            settingsMount.appendChild(settingsRoot);
+            manager = {
+                root: settingsRoot,
+                activate: () => {
+                    const extensionId = settingsMount.getAttribute('data-spindle-extension-root');
+                    ctx.events.emit('open-settings', {
+                        view: 'extensions',
+                        ...(extensionId ? { extensionId } : {}),
+                    });
+                },
+                destroy: () => settingsRoot.remove(),
+            };
             managerConsumesDrawerSlot = false;
         }
-        else {
+        catch (error) {
+            console.warn('[Cubby] settings_extensions mount unavailable; using drawer manager fallback', error);
             managerConsumesDrawerSlot = true;
-            manager = ctx.ui.registerDrawerTab({
+            const fallbackManager = ctx.ui.registerDrawerTab({
                 id: 'cubby_manager',
                 title: 'Cubby',
                 shortName: 'Cubby',
@@ -882,25 +889,37 @@ export async function setup(ctx) {
                 keywords: ['cubby', 'folders', 'sidebar', 'drawer', 'tabs', 'groups'],
                 iconSvg: CUBBY_ICON,
             });
+            manager = {
+                root: fallbackManager.root,
+                activate: () => fallbackManager.activate(),
+                destroy: () => fallbackManager.destroy(),
+            };
         }
         cleanups.push(() => manager?.destroy());
-        try {
-            const saved = await ctx.settings.get(CONFIG_KEY);
-            config = normalizeConfig(saved);
-            if (saved === undefined) {
-                await ctx.settings.set(CONFIG_KEY, cloneConfig(config));
-                console.info('[Cubby] setup: initialized empty config');
+        // Use the backend's per-user extension storage, following working Spindle
+        // extensions. Frontend ctx.settings is deliberately not used here: on some
+        // current host bundles its bridge is disposed before async setup work runs.
+        const unsubBackend = ctx.onBackendMessage((payload) => {
+            if (!payload || typeof payload !== 'object')
+                return;
+            if (payload.type === 'config_loaded') {
+                // Do not overwrite an edit made before a slow first load completes.
+                if (configLoaded)
+                    return;
+                configLoaded = true;
+                config = normalizeConfig(payload.config);
+                syncGroupTabs();
+                renderManager();
+                refreshHideStyle();
+                updateHeaderBack(ctx.ui.events.getDrawerState().tabId);
+                console.info(`[Cubby] setup: loaded ${config.groups.length} cubby${config.groups.length === 1 ? '' : 'ies'}`);
             }
-        } catch (error) {
-            console.warn('[Cubby] setup: settings read failed; booting with empty config', error);
-            config = { version: 1, groups: [] };
-            try {
-                await ctx.settings.set(CONFIG_KEY, cloneConfig(config));
-                console.info('[Cubby] setup: initialized config after read failure');
-            } catch (writeError) {
-                console.error('[Cubby] setup: could not initialize persistent config', writeError);
+            else if (payload.type === 'config_error') {
+                console.error('[Cubby] persistent config error', payload.error);
             }
-        }
+        });
+        cleanups.push(unsubBackend);
+        ctx.sendToBackend({ type: 'get_config' });
         handleSurfaceList(ctx.host.surfaces.list(['drawer_tab']));
         syncGroupTabs();
         renderManager();
@@ -914,19 +933,6 @@ export async function setup(ctx) {
         });
         cleanups.push(unsubDrawer);
         installHeaderBack();
-        const unwatch = ctx.settings.watch(CONFIG_KEY, (value) => {
-            if (disposed || !value)
-                return;
-            const normalized = normalizeConfig(value);
-            if (JSON.stringify(normalized) === JSON.stringify(config))
-                return;
-            config = normalized;
-            syncGroupTabs();
-            renderManager();
-            refreshHideStyle();
-            updateHeaderBack(ctx.ui.events.getDrawerState().tabId);
-        });
-        cleanups.push(unwatch);
         cleanups.push(() => {
             removeHideStyle?.();
             removeHideStyle = null;
@@ -946,7 +952,16 @@ export async function setup(ctx) {
             }
         };
     }
-    finally {
-        ctx.ready();
+    catch (error) {
+        console.error('[Cubby] setup failed', error);
+        return () => {
+            disposed = true;
+            for (const cleanup of cleanups.splice(0).reverse()) {
+                try {
+                    cleanup();
+                }
+                catch { }
+            }
+        };
     }
 }
