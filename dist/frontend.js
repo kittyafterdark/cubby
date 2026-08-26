@@ -82,7 +82,13 @@ function originLabel(surface) {
 }
 function safeInlineSvg(svg) {
     try {
-        const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+        // A surprising number of icon snippets (including our own fallbacks) are
+        // bare <svg> fragments. Give them the SVG namespace before XML parsing so
+        // imported nodes are real SVG elements in every browser, not inert boxes.
+        const source = /<svg\b[^>]*\sxmlns=/.test(svg)
+            ? svg
+            : svg.replace(/<svg\b/i, '<svg xmlns=\"http://www.w3.org/2000/svg\"');
+        const doc = new DOMParser().parseFromString(source, 'image/svg+xml');
         const root = doc.documentElement;
         if (root.tagName.toLowerCase() !== 'svg' || doc.querySelector('parsererror'))
             return null;
@@ -102,6 +108,41 @@ function safeInlineSvg(svg) {
     catch {
         return null;
     }
+}
+function drawerButtonFor(id) {
+    const wanted = `drawer-tab:${id}`;
+    const mounts = document.querySelectorAll('[data-spindle-mount="drawer_tab"][data-spindle-scope]');
+    for (const mount of mounts) {
+        if (mount.getAttribute('data-spindle-scope') === wanted)
+            return mount.closest('button');
+    }
+    return null;
+}
+function cloneDrawerIcon(id) {
+    const button = drawerButtonFor(id);
+    if (!button)
+        return null;
+    const svg = button.querySelector('svg');
+    if (svg)
+        return svg.cloneNode(true);
+    const image = button.querySelector('img');
+    if (image) {
+        const clone = image.cloneNode(true);
+        clone.alt = '';
+        return clone;
+    }
+    return null;
+}
+function drawerIconSnapshot(id) {
+    const button = drawerButtonFor(id);
+    if (!button)
+        return {};
+    const svg = button.querySelector('svg');
+    if (svg)
+        return { iconSvg: svg.outerHTML };
+    const image = button.querySelector('img');
+    const src = image?.currentSrc || image?.src;
+    return src ? { iconName: src } : {};
 }
 const BUILTIN_ICONS = [
     [/summary|compose|prompt/i, '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.8h8l4 4V20H6z"/><path d="M14 3.8V8h4"/><path d="M9 12h6M9 15.5h6"/></svg>'],
@@ -447,6 +488,7 @@ export function setup(ctx) {
     @media (max-width: 760px) {
       .cubby-root { padding: 14px; }
       .cubby-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .cubby-grid > .cubby-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
       .cubby-tile { min-height: 102px; padding: 12px; }
       .cubby-group-card { grid-template-columns: 38px minmax(0, 1fr); }
       .cubby-group-card .cubby-actions { grid-column: 1 / -1; }
@@ -455,6 +497,7 @@ export function setup(ctx) {
       .cubby-topline { align-items: stretch; }
       .cubby-title { font-size: 19px; }
       .cubby-grid { grid-template-columns: 1fr; }
+      .cubby-grid > .cubby-tile:last-child:nth-child(odd) { grid-column: auto; }
       .cubby-picker-row { grid-template-columns: 30px minmax(0, 1fr) 18px; }
       .cubby-picker-row .cubby-pill { display: none; }
       .cubby-folder-strip { grid-template-columns: 1fr; }
@@ -482,12 +525,13 @@ export function setup(ctx) {
         const live = availableSurface(member.id);
         if (!live)
             return { ...member };
+        const captured = drawerIconSnapshot(live.id);
         return {
             id: live.id,
             label: live.label || member.label || live.id,
             owner: live.owner,
-            iconName: live.iconName,
-            iconSvg: live.iconSvg,
+            iconName: live.iconName || captured.iconName || member.iconName,
+            iconSvg: live.iconSvg || captured.iconSvg || member.iconSvg,
         };
     }
     function refreshHideStyle() {
@@ -509,9 +553,23 @@ export function setup(ctx) {
         removeHideStyle = ctx.dom.addStyle(rules.join('\n'));
     }
     function appendSurfaceIcon(box, surface, snapshot, label, id) {
-        const svgSource = surface?.iconSvg || snapshot?.iconSvg || fallbackIconSvg(id, label);
-        if (svgSource) {
-            const svg = safeInlineSvg(svgSource);
+        // Extension surfaces usually provide iconSvg directly. Built-ins currently
+        // do not, but their real Lucide SVG is already sitting in the host drawer.
+        // Clone that exact rendered icon before falling back to stored metadata.
+        if (surface?.iconSvg) {
+            const svg = safeInlineSvg(surface.iconSvg);
+            if (svg) {
+                box.append(svg);
+                return;
+            }
+        }
+        const hostIcon = cloneDrawerIcon(id);
+        if (hostIcon) {
+            box.append(hostIcon);
+            return;
+        }
+        if (snapshot?.iconSvg) {
+            const svg = safeInlineSvg(snapshot.iconSvg);
             if (svg) {
                 box.append(svg);
                 return;
@@ -528,6 +586,14 @@ export function setup(ctx) {
             }, { once: true });
             box.append(img);
             return;
+        }
+        const fallback = fallbackIconSvg(id, label);
+        if (fallback) {
+            const svg = safeInlineSvg(fallback);
+            if (svg) {
+                box.append(svg);
+                return;
+            }
         }
         box.textContent = iconInitial(label);
     }
@@ -668,12 +734,13 @@ export function setup(ctx) {
     function candidateMembers(group) {
         const map = new Map();
         for (const surface of surfaces) {
+            const captured = drawerIconSnapshot(surface.id);
             map.set(surface.id, {
                 id: surface.id,
                 label: surface.label || surface.id,
                 owner: surface.owner,
-                iconName: surface.iconName,
-                iconSvg: surface.iconSvg,
+                iconName: surface.iconName || captured.iconName,
+                iconSvg: surface.iconSvg || captured.iconSvg,
             });
         }
         for (const member of group?.members || []) {
@@ -866,12 +933,13 @@ export function setup(ctx) {
             const members = [...selected].map((id) => {
                 const live = availableSurface(id);
                 if (live) {
+                    const captured = drawerIconSnapshot(live.id);
                     return {
                         id: live.id,
                         label: live.label || live.id,
                         owner: live.owner,
-                        iconName: live.iconName,
-                        iconSvg: live.iconSvg,
+                        iconName: live.iconName || captured.iconName,
+                        iconSvg: live.iconSvg || captured.iconSvg,
                     };
                 }
                 return existingSnapshots.get(id) || { id, label: id };

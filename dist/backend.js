@@ -1,4 +1,3 @@
-"use strict";
 const DEFAULT_CONFIG = { version: 1, groups: [] };
 spindle.onFrontendMessage(async (payload, userId) => {
     if (!payload || typeof payload !== 'object')

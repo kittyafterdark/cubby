@@ -2,7 +2,7 @@
 
 Cubby is an unofficial community Spindle extension for Lumiverse that groups drawer tabs behind compact sidebar folder tabs.
 
-## v0.2.0 — polish pass
+## v0.2.1 — polish pass
 
 - Reworked Cubby launcher into a calmer responsive card grid.
 - Uses host/extension SVG icons when available, with built-in fallbacks instead of giant initial-letter placeholders.

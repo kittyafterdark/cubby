@@ -120,7 +120,13 @@ function originLabel(surface: Pick<SpindleHostSurfaceInfo, 'owner'>): string {
 
 function safeInlineSvg(svg: string): SVGElement | null {
   try {
-    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
+    // A surprising number of icon snippets (including our own fallbacks) are
+    // bare <svg> fragments. Give them the SVG namespace before XML parsing so
+    // imported nodes are real SVG elements in every browser, not inert boxes.
+    const source = /<svg\b[^>]*\sxmlns=/.test(svg)
+      ? svg
+      : svg.replace(/<svg\b/i, '<svg xmlns=\"http://www.w3.org/2000/svg\"')
+    const doc = new DOMParser().parseFromString(source, 'image/svg+xml')
     const root = doc.documentElement
     if (root.tagName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) return null
     root.querySelectorAll('script, foreignObject').forEach((node) => node.remove())
@@ -136,6 +142,39 @@ function safeInlineSvg(svg: string): SVGElement | null {
   } catch {
     return null
   }
+}
+
+function drawerButtonFor(id: string): HTMLButtonElement | null {
+  const wanted = `drawer-tab:${id}`
+  const mounts = document.querySelectorAll<HTMLElement>('[data-spindle-mount="drawer_tab"][data-spindle-scope]')
+  for (const mount of mounts) {
+    if (mount.getAttribute('data-spindle-scope') === wanted) return mount.closest('button')
+  }
+  return null
+}
+
+function cloneDrawerIcon(id: string): SVGElement | HTMLImageElement | null {
+  const button = drawerButtonFor(id)
+  if (!button) return null
+  const svg = button.querySelector('svg')
+  if (svg) return svg.cloneNode(true) as SVGElement
+  const image = button.querySelector('img')
+  if (image) {
+    const clone = image.cloneNode(true) as HTMLImageElement
+    clone.alt = ''
+    return clone
+  }
+  return null
+}
+
+function drawerIconSnapshot(id: string): Pick<MemberSnapshot, 'iconName' | 'iconSvg'> {
+  const button = drawerButtonFor(id)
+  if (!button) return {}
+  const svg = button.querySelector('svg')
+  if (svg) return { iconSvg: svg.outerHTML }
+  const image = button.querySelector('img') as HTMLImageElement | null
+  const src = image?.currentSrc || image?.src
+  return src ? { iconName: src } : {}
 }
 
 const BUILTIN_ICONS: Array<[RegExp, string]> = [
@@ -486,6 +525,7 @@ export function setup(ctx: SpindleFrontendContext) {
     @media (max-width: 760px) {
       .cubby-root { padding: 14px; }
       .cubby-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .cubby-grid > .cubby-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
       .cubby-tile { min-height: 102px; padding: 12px; }
       .cubby-group-card { grid-template-columns: 38px minmax(0, 1fr); }
       .cubby-group-card .cubby-actions { grid-column: 1 / -1; }
@@ -494,6 +534,7 @@ export function setup(ctx: SpindleFrontendContext) {
       .cubby-topline { align-items: stretch; }
       .cubby-title { font-size: 19px; }
       .cubby-grid { grid-template-columns: 1fr; }
+      .cubby-grid > .cubby-tile:last-child:nth-child(odd) { grid-column: auto; }
       .cubby-picker-row { grid-template-columns: 30px minmax(0, 1fr) 18px; }
       .cubby-picker-row .cubby-pill { display: none; }
       .cubby-folder-strip { grid-template-columns: 1fr; }
@@ -524,12 +565,13 @@ export function setup(ctx: SpindleFrontendContext) {
   function currentMemberSnapshot(member: MemberSnapshot): MemberSnapshot {
     const live = availableSurface(member.id)
     if (!live) return { ...member }
+    const captured = drawerIconSnapshot(live.id)
     return {
       id: live.id,
       label: live.label || member.label || live.id,
       owner: live.owner,
-      iconName: live.iconName,
-      iconSvg: live.iconSvg,
+      iconName: live.iconName || captured.iconName || member.iconName,
+      iconSvg: live.iconSvg || captured.iconSvg || member.iconSvg,
     }
   }
 
@@ -559,9 +601,25 @@ export function setup(ctx: SpindleFrontendContext) {
     label: string,
     id: string,
   ) {
-    const svgSource = surface?.iconSvg || snapshot?.iconSvg || fallbackIconSvg(id, label)
-    if (svgSource) {
-      const svg = safeInlineSvg(svgSource)
+    // Extension surfaces usually provide iconSvg directly. Built-ins currently
+    // do not, but their real Lucide SVG is already sitting in the host drawer.
+    // Clone that exact rendered icon before falling back to stored metadata.
+    if (surface?.iconSvg) {
+      const svg = safeInlineSvg(surface.iconSvg)
+      if (svg) {
+        box.append(svg)
+        return
+      }
+    }
+
+    const hostIcon = cloneDrawerIcon(id)
+    if (hostIcon) {
+      box.append(hostIcon)
+      return
+    }
+
+    if (snapshot?.iconSvg) {
+      const svg = safeInlineSvg(snapshot.iconSvg)
       if (svg) {
         box.append(svg)
         return
@@ -579,6 +637,15 @@ export function setup(ctx: SpindleFrontendContext) {
       }, { once: true })
       box.append(img)
       return
+    }
+
+    const fallback = fallbackIconSvg(id, label)
+    if (fallback) {
+      const svg = safeInlineSvg(fallback)
+      if (svg) {
+        box.append(svg)
+        return
+      }
     }
 
     box.textContent = iconInitial(label)
@@ -735,12 +802,13 @@ export function setup(ctx: SpindleFrontendContext) {
   function candidateMembers(group?: CubbyGroup): MemberSnapshot[] {
     const map = new Map<string, MemberSnapshot>()
     for (const surface of surfaces) {
+      const captured = drawerIconSnapshot(surface.id)
       map.set(surface.id, {
         id: surface.id,
         label: surface.label || surface.id,
         owner: surface.owner,
-        iconName: surface.iconName,
-        iconSvg: surface.iconSvg,
+        iconName: surface.iconName || captured.iconName,
+        iconSvg: surface.iconSvg || captured.iconSvg,
       })
     }
     for (const member of group?.members || []) {
@@ -951,12 +1019,13 @@ export function setup(ctx: SpindleFrontendContext) {
       const members = [...selected].map((id) => {
         const live = availableSurface(id)
         if (live) {
+          const captured = drawerIconSnapshot(live.id)
           return {
             id: live.id,
             label: live.label || live.id,
             owner: live.owner,
-            iconName: live.iconName,
-            iconSvg: live.iconSvg,
+            iconName: live.iconName || captured.iconName,
+            iconSvg: live.iconSvg || captured.iconSvg,
           }
         }
         return existingSnapshots.get(id) || { id, label: id }
